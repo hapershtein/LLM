@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(echo Ollama not running or no models:*)",
+      "Bash(tail:*)",
+      "Bash(cd:*)",
+      "Bash(echo \"list files in /tmp\" | python3 main.py -m qwen2.5-coder:latest 2>&1)",
+      "Bash(python3:*)",
+      "Bash(chmod +x:*)"
+    ]
+  }
+}
