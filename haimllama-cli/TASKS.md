@@ -1,4 +1,4 @@
-# Tasks — Agentic CLI
+# Tasks — haimllama-cli
 
 Track of all planned, in-progress, and completed work.
 Format: `[status]` — `description` — `notes`
@@ -17,8 +17,8 @@ Legend: `[x]` done · `[~]` in progress · `[ ]` todo · `[!]` blocked
 - [x] **M0-6** Interactive REPL with `/help`, `/clear`, `/model`, `/models`, `/tools`, `/history`, `/save`, `/load`, `/exit`
 - [x] **M0-7** One-shot mode and piped stdin support
 - [x] **M0-8** `--model`, `--url`, `--no-tools`, `--max-iter`, `--list-models` CLI flags
-- [x] **M0-9** Config persistence (`~/.config/agent-cli/config.json`)
-- [x] **M0-10** Bash launcher script (`agent-cli`)
+- [x] **M0-9** Config persistence (`~/.config/haimllama-cli/config.json`)
+- [x] **M0-10** Bash launcher script (`haimllama-cli`)
 
 ---
 
@@ -96,7 +96,7 @@ Legend: `[x]` done · `[~]` in progress · `[ ]` todo · `[!]` blocked
 ## Milestone 6 — Roadmap [ ]
 
 - [ ] **M6-1** Persistent memory with local embeddings (RAG over past conversations)
-- [ ] **M6-2** Custom tool plugins from `~/.config/agent-cli/tools/*.py`
+- [ ] **M6-2** Custom tool plugins from `~/.config/haimllama-cli/tools/*.py`
 - [ ] **M6-3** Multi-agent: spawn subagents for parallel subtasks
 - [ ] **M6-4** Vision: pass images to multimodal models (llava, llama3.2-vision)
 - [ ] **M6-5** TUI dashboard with split-pane layout (chat | tool log | file tree)

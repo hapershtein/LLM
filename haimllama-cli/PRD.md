@@ -1,4 +1,4 @@
-# Product Requirements Document — Agentic CLI
+# Product Requirements Document — haimllama-cli
 
 **Version:** 1.0
 **Date:** 2026-02-22
@@ -8,7 +8,7 @@
 
 ## 1. Overview
 
-Agentic CLI is a local, offline-first AI agent that runs in the terminal. It connects to
+haimllama-cli is a local, offline-first AI agent that runs in the terminal. It connects to
 [Ollama](https://ollama.com) to use open-source language models and can autonomously use
 tools to complete multi-step tasks — reading and writing files, running shell commands,
 executing Python, searching codebases, and fetching URLs — without sending data to any
@@ -124,7 +124,7 @@ Existing solutions either require cloud connectivity, lack tool use, or are GUI-
 
 | ID | Feature | Priority |
 |----|---------|----------|
-| F26 | Persist last-used model to `~/.config/agent-cli/config.json` | P2 |
+| F26 | Persist last-used model to `~/.config/haimllama-cli/config.json` | P2 |
 | F27 | `OLLAMA_URL` env var for base URL override | P1 |
 
 ---
@@ -152,7 +152,7 @@ main.py          CLI entry point, REPL loop, UI rendering
 - Python 3.12+
 - Dependencies: `httpx` (HTTP client), `rich` (terminal UI)
 - Requires Ollama running locally (or accessible at `OLLAMA_URL`)
-- No root/sudo needed; writes only to `~/.config/agent-cli/`
+- No root/sudo needed; writes only to `~/.config/haimllama-cli/`
 
 ---
 
@@ -171,7 +171,7 @@ main.py          CLI entry point, REPL loop, UI rendering
 
 - [ ] **Sandboxed execution** — Docker/Podman container for `shell` and `python_eval`
 - [ ] **Persistent memory** — RAG over conversation history using local embeddings
-- [ ] **Custom tools** — load tool plugins from `~/.config/agent-cli/tools/`
+- [ ] **Custom tools** — load tool plugins from `~/.config/haimllama-cli/tools/`
 - [ ] **Multi-agent** — spawn subagents for parallelisable subtasks
 - [ ] **Vision support** — pass screenshots/images to multimodal models (llava)
 - [ ] **TUI dashboard** — split-pane view: chat | tool call log | file tree

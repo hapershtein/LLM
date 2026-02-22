@@ -1,4 +1,4 @@
-# agent-cli
+# haimllama-cli
 
 A local agentic CLI powered by [Ollama](https://ollama.com). The agent can reason, plan, and use tools to complete tasks — all running offline on your machine.
 
@@ -66,6 +66,6 @@ Best models for tool use (tested):
 
 ## Config
 
-Settings saved to `~/.config/agent-cli/config.json` (last used model).
+Settings saved to `~/.config/haimllama-cli/config.json` (last used model).
 
 Set `OLLAMA_URL` env var to use a remote Ollama instance.

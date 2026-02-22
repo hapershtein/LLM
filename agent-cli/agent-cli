@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-# Launcher for agent-cli — makes it runnable from anywhere.
-# Symlink or copy to ~/bin/agent-cli and chmod +x it.
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec python3 "$SCRIPT_DIR/main.py" "$@"

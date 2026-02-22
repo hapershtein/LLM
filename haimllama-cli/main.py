@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Agentic CLI — a local AI agent powered by Ollama.
+haimllama-cli — a local AI agent powered by Ollama.
 
 Usage:
     python main.py                        # interactive mode, default model
@@ -17,13 +17,12 @@ import sys
 import textwrap
 from pathlib import Path
 
+import readline  # noqa: F401 — enables arrow keys, backspace, history for input()
+
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.prompt import Prompt
-from rich.rule import Rule
 from rich.syntax import Syntax
-from rich.text import Text
 from rich import print as rprint
 
 from agent import Agent
@@ -32,9 +31,9 @@ from tools import TOOL_MAP, TOOL_SCHEMAS
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
-DEFAULT_MODEL = "llama3.2:latest"
+DEFAULT_MODEL = "qwen2.5:7b"
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
-CONFIG_PATH = Path.home() / ".config" / "agent-cli" / "config.json"
+CONFIG_PATH = Path.home() / ".config" / "haimllama-cli" / "config.json"
 
 SYSTEM_PROMPT = """You are a highly capable local AI agent. You have access to tools that let you:
 - Run shell commands
@@ -49,7 +48,7 @@ Current working directory: {cwd}
 """
 
 HELP_TEXT = """
-[bold cyan]Agentic CLI — Commands[/bold cyan]
+[bold cyan]haimllama-cli — Commands[/bold cyan]
 
   [bold]/help[/bold]            Show this help
   [bold]/tools[/bold]           List available tools
@@ -62,9 +61,9 @@ HELP_TEXT = """
   [bold]/exit[/bold]            Exit (also: Ctrl+C, Ctrl+D)
 
 [bold]Tips:[/bold]
-  • Pipe input:  echo "what files are here?" | python main.py
-  • One-shot:    python main.py "write me a hello world in Rust"
-  • Pick model:  python main.py -m llama3.2
+  • Pipe input:  echo "what files are here?" | haimllama-cli
+  • One-shot:    haimllama-cli "write me a hello world in Rust"
+  • Pick model:  haimllama-cli -m llama3.2
 """
 
 
@@ -166,14 +165,14 @@ def repl(agent: Agent, client: OllamaClient, model_holder: list[str]) -> None:
             f"[bold]Model:[/bold] [cyan]{model_holder[0]}[/cyan]  "
             f"[bold]Tools:[/bold] {len(TOOL_SCHEMAS)} available\n"
             f"[dim]Type [bold]/help[/bold] for commands, [bold]/exit[/bold] to quit[/dim]",
-            title="[bold magenta]Agentic CLI[/bold magenta]",
+            title="[bold magenta]haimllama-cli[/bold magenta]",
             border_style="magenta",
         )
     )
 
     while True:
         try:
-            user_input = Prompt.ask("\n[bold blue]You[/bold blue]").strip()
+            user_input = input("\nYou: ").strip()
         except (KeyboardInterrupt, EOFError):
             console.print("\n[dim]Goodbye.[/dim]")
             break
@@ -269,14 +268,14 @@ def repl(agent: Agent, client: OllamaClient, model_holder: list[str]) -> None:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Agentic CLI — a local AI agent powered by Ollama",
+        description="haimllama-cli — a local AI agent powered by Ollama",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=textwrap.dedent("""
             Examples:
-              python main.py
-              python main.py -m llama3.2
-              python main.py "list files in the current directory"
-              echo "summarise this text" | python main.py
+              haimllama-cli
+              haimllama-cli -m llama3.2
+              haimllama-cli "list files in the current directory"
+              echo "summarise this text" | haimllama-cli
         """),
     )
     parser.add_argument("query", nargs="?", help="One-shot query (non-interactive)")
