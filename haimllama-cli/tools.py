@@ -37,7 +37,7 @@ TOOL_SCHEMAS = [
                     },
                     "timeout": {
                         "type": "integer",
-                        "description": "Timeout in seconds (default 30).",
+                        "description": "Timeout in seconds (default 90).",
                     },
                 },
                 "required": ["command"],
@@ -193,6 +193,78 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "edit_file",
+            "description": (
+                "Edit an existing file by replacing a specific block of text. "
+                "Provide old_text (exact match, including whitespace/indentation) "
+                "and new_text to substitute. Use this for targeted changes without "
+                "rewriting the whole file. Fails if old_text is not found."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the file to edit.",
+                    },
+                    "old_text": {
+                        "type": "string",
+                        "description": "Exact text to find (must exist in the file).",
+                    },
+                    "new_text": {
+                        "type": "string",
+                        "description": "Replacement text.",
+                    },
+                    "replace_all": {
+                        "type": "boolean",
+                        "description": "Replace every occurrence instead of only the first (default false).",
+                    },
+                },
+                "required": ["path", "old_text", "new_text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_tests",
+            "description": (
+                "Run a test suite and return the output. "
+                "Defaults to pytest. Use the 'command' parameter to specify "
+                "a different test runner (e.g. 'python -m unittest'). "
+                "Returns stdout/stderr and exit code."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Test file or directory to run (default '.').",
+                    },
+                    "command": {
+                        "type": "string",
+                        "description": "Test runner command (default 'pytest').",
+                    },
+                    "args": {
+                        "type": "string",
+                        "description": "Extra flags, e.g. '-v --tb=short' (optional).",
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Working directory (optional).",
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Timeout in seconds (default 120).",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "fetch_url",
             "description": "Fetch the content of a URL (HTTP GET). Returns text response.",
             "parameters": {
@@ -216,7 +288,7 @@ TOOL_SCHEMAS = [
 
 # ── Implementations ────────────────────────────────────────────────────────────
 
-def run_shell(command: str, cwd: str = None, timeout: int = 30) -> str:
+def run_shell(command: str, cwd: str = None, timeout: int = 90) -> str:
     try:
         result = subprocess.run(
             command,
@@ -273,6 +345,36 @@ def write_file(path: str, content: str, append: bool = False) -> str:
         return f"{action} {len(content)} chars to {path}"
     except Exception as e:
         return f"[error] {e}"
+
+
+def edit_file(path: str, old_text: str, new_text: str, replace_all: bool = False) -> str:
+    try:
+        p = Path(path).expanduser()
+        if not p.exists():
+            return f"[error] File not found: {path}"
+        content = p.read_text(errors="replace")
+        if old_text not in content:
+            return f"[error] old_text not found in {path}"
+        count = content.count(old_text) if replace_all else 1
+        new_content = content.replace(old_text, new_text) if replace_all else content.replace(old_text, new_text, 1)
+        p.write_text(new_content)
+        return f"Replaced {count} occurrence(s) in {path}"
+    except Exception as e:
+        return f"[error] {e}"
+
+
+def run_tests(
+    path: str = ".",
+    command: str = "pytest",
+    args: str = "",
+    cwd: str = None,
+    timeout: int = 120,
+) -> str:
+    parts = [command, path]
+    if args:
+        parts.append(args)
+    cmd = " ".join(parts)
+    return run_shell(cmd, cwd=cwd, timeout=timeout)
 
 
 def list_dir(path: str = ".", show_hidden: bool = False) -> str:
@@ -400,11 +502,30 @@ TOOL_MAP: dict[str, Any] = {
     "shell": run_shell,
     "read_file": read_file,
     "write_file": write_file,
+    "edit_file": edit_file,
+    "run_tests": run_tests,
     "list_dir": list_dir,
     "find_files": find_files,
     "grep": grep,
     "python_eval": python_eval,
     "fetch_url": fetch_url,
+}
+
+# Risk level for each tool — used by the interactive permission system.
+#   safe      — read-only, no side effects; auto-approved
+#   confirm   — writes files or executes code; prompt before running
+#   dangerous — arbitrary shell execution; prompt with a strong warning
+TOOL_RISK: dict[str, str] = {
+    "read_file":   "safe",
+    "list_dir":    "safe",
+    "find_files":  "safe",
+    "grep":        "safe",
+    "fetch_url":   "safe",
+    "write_file":  "confirm",
+    "edit_file":   "confirm",
+    "run_tests":   "confirm",
+    "python_eval": "confirm",
+    "shell":       "dangerous",
 }
 
 

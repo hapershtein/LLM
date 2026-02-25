@@ -6,6 +6,18 @@ from typing import Callable
 
 from ollama_client import OllamaClient
 from tools import TOOL_SCHEMAS, dispatch
+from logger import get_logger
+
+log = get_logger("agent")
+
+_MAX_LOG_CONTENT = 400  # chars truncated in log lines to keep them readable
+
+
+def _trunc(text: str, limit: int = _MAX_LOG_CONTENT) -> str:
+    """Truncate a string for log output."""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f" …[+{len(text) - limit}]"
 
 
 def _sanitize_args(args: dict) -> dict:
@@ -89,8 +101,17 @@ class Agent:
         if system_prompt:
             self.messages.append({"role": "system", "content": system_prompt})
 
+        log.info("Agent created — model=%s  max_iter=%d  tools=%d",
+                 model, max_iterations, len(TOOL_SCHEMAS))
+
     def _run_tool_calls(self, tool_calls: list[dict]) -> list[dict]:
-        """Execute tool calls and return tool-result messages."""
+        """Execute tool calls and return tool-result messages.
+
+        The ``on_tool_call`` callback now acts as a permission gate:
+          - returns True  (or None, for backward compat) → allow
+          - returns False → deny; a denial message is injected so the LLM
+            can adapt rather than hang waiting for a result that never comes.
+        """
         result_messages = []
         for tc in tool_calls:
             name = tc.get("function", {}).get("name", "")
@@ -107,10 +128,28 @@ class Agent:
 
             args = _sanitize_args(args)
 
+            log.info("Tool call  → %s  args=%s", name, _trunc(json.dumps(args)))
+
+            # Permission gate — None return treated as True (backward compat)
+            allowed = True
             if self.on_tool_call:
-                self.on_tool_call(name, args)
+                decision = self.on_tool_call(name, args)
+                allowed = decision is not False
+
+            if not allowed:
+                log.info("Tool call denied by user — %s", name)
+                result_messages.append({
+                    "role": "tool",
+                    "content": (
+                        f"[permission denied] The user denied the call to '{name}'. "
+                        "Consider a different approach or inform the user you cannot proceed."
+                    ),
+                })
+                continue
 
             result = dispatch(name, args)
+
+            log.debug("Tool result ← %s  %s", name, _trunc(result))
 
             if self.on_tool_result:
                 self.on_tool_result(name, result)
@@ -123,9 +162,11 @@ class Agent:
 
     def run(self, user_message: str) -> str:
         """Add user message and run the agentic loop until done."""
+        log.info("Run started — message=%s", _trunc(user_message))
         self.messages.append({"role": "user", "content": user_message})
 
         for iteration in range(self.max_iterations):
+            log.debug("Iteration %d/%d", iteration + 1, self.max_iterations)
             # Use streaming only when we expect a text response (no tools needed
             # yet), but Ollama returns tool_calls in the final done chunk.
             # We collect the full response first, then check for tool_calls.
@@ -173,13 +214,16 @@ class Agent:
             if assistant_content:
                 text_calls = _extract_text_tool_calls(assistant_content)
                 if text_calls:
+                    log.debug("Text-based tool call(s) detected — count=%d", len(text_calls))
                     result_messages = self._run_tool_calls(text_calls)
                     self.messages.extend(result_messages)
                     continue
 
             # No tool calls → final answer
+            log.info("Final answer — %s", _trunc(assistant_content))
             return assistant_content
 
+        log.warning("Max iterations (%d) reached without a final answer", self.max_iterations)
         return "[max iterations reached]"
 
     def clear(self):

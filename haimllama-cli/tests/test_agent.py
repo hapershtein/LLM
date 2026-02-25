@@ -401,3 +401,116 @@ class TestAgentRunMaxIterations:
         agent = Agent(model="test", client=client, max_iterations=3)
         result = agent.run("loop forever")
         assert "max iterations" in result
+
+
+# ── Agent permission gate ──────────────────────────────────────────────────────
+
+class TestAgentPermission:
+    """on_tool_call now gates execution: False=deny, True/None=allow."""
+
+    def test_denied_call_injects_denial_message(self):
+        tool_call = {"function": {"name": "shell", "arguments": {"command": "rm -rf /"}}}
+        chunks_1 = [make_chunk(tool_calls=[tool_call], done=True)]
+        chunks_2 = [make_chunk(content="ok, I won't do that", done=True)]
+
+        client = MagicMock()
+        client.chat.side_effect = [iter(chunks_1), iter(chunks_2)]
+        agent = Agent(model="test", client=client, on_tool_call=lambda n, a: False)
+
+        agent.run("delete everything")
+        tool_msgs = [m for m in agent.messages if m["role"] == "tool"]
+        assert len(tool_msgs) == 1
+        assert "permission denied" in tool_msgs[0]["content"]
+        assert "shell" in tool_msgs[0]["content"]
+
+    def test_denied_call_does_not_dispatch(self):
+        """Dispatch must not be called when on_tool_call returns False."""
+        tool_call = {"function": {"name": "python_eval", "arguments": {"code": "print(99)"}}}
+        chunks_1 = [make_chunk(tool_calls=[tool_call], done=True)]
+        chunks_2 = [make_chunk(content="denied", done=True)]
+
+        client = MagicMock()
+        client.chat.side_effect = [iter(chunks_1), iter(chunks_2)]
+        agent = Agent(model="test", client=client, on_tool_call=lambda n, a: False)
+
+        agent.run("compute")
+        tool_msgs = [m for m in agent.messages if m["role"] == "tool"]
+        # Result should NOT contain "99" (which dispatch would have produced)
+        assert "99" not in tool_msgs[0]["content"]
+
+    def test_allowed_call_dispatches_normally(self):
+        tool_call = {"function": {"name": "python_eval", "arguments": {"code": "print(42)"}}}
+        chunks_1 = [make_chunk(tool_calls=[tool_call], done=True)]
+        chunks_2 = [make_chunk(content="done", done=True)]
+
+        client = MagicMock()
+        client.chat.side_effect = [iter(chunks_1), iter(chunks_2)]
+        agent = Agent(model="test", client=client, on_tool_call=lambda n, a: True)
+
+        agent.run("compute")
+        tool_msgs = [m for m in agent.messages if m["role"] == "tool"]
+        assert "42" in tool_msgs[0]["content"]
+
+    def test_none_return_treated_as_allow(self):
+        """Backward compat: callbacks that return None (informational) still allow."""
+        tool_call = {"function": {"name": "python_eval", "arguments": {"code": "print(7)"}}}
+        chunks_1 = [make_chunk(tool_calls=[tool_call], done=True)]
+        chunks_2 = [make_chunk(content="done", done=True)]
+
+        client = MagicMock()
+        client.chat.side_effect = [iter(chunks_1), iter(chunks_2)]
+        # Callback returns None implicitly
+        agent = Agent(model="test", client=client, on_tool_call=lambda n, a: None)
+
+        agent.run("compute")
+        tool_msgs = [m for m in agent.messages if m["role"] == "tool"]
+        assert "7" in tool_msgs[0]["content"]
+
+    def test_no_callback_always_allows(self):
+        """When on_tool_call is not set, all tools run unconditionally."""
+        tool_call = {"function": {"name": "python_eval", "arguments": {"code": "print(5)"}}}
+        chunks_1 = [make_chunk(tool_calls=[tool_call], done=True)]
+        chunks_2 = [make_chunk(content="done", done=True)]
+
+        client = MagicMock()
+        client.chat.side_effect = [iter(chunks_1), iter(chunks_2)]
+        agent = Agent(model="test", client=client)  # no on_tool_call
+
+        agent.run("compute")
+        tool_msgs = [m for m in agent.messages if m["role"] == "tool"]
+        assert "5" in tool_msgs[0]["content"]
+
+    def test_denial_message_sent_back_to_llm(self):
+        """After denial the agent loops and calls the LLM again with the denial message."""
+        tool_call = {"function": {"name": "shell", "arguments": {"command": "ls"}}}
+        chunks_1 = [make_chunk(tool_calls=[tool_call], done=True)]
+        chunks_2 = [make_chunk(content="understood", done=True)]
+
+        client = MagicMock()
+        client.chat.side_effect = [iter(chunks_1), iter(chunks_2)]
+        agent = Agent(model="test", client=client, on_tool_call=lambda n, a: False)
+
+        result = agent.run("list files")
+        # The LLM must have been called a second time (with the denial message)
+        assert client.chat.call_count == 2
+        assert result == "understood"
+
+    def test_mixed_allow_and_deny_in_same_batch(self):
+        """Two tool calls in one batch: first denied, second allowed."""
+        tc_deny  = {"function": {"name": "shell",       "arguments": {"command": "rm /"}}}
+        tc_allow = {"function": {"name": "python_eval", "arguments": {"code": "print('ok')"}}}
+        chunks_1 = [make_chunk(tool_calls=[tc_deny, tc_allow], done=True)]
+        chunks_2 = [make_chunk(content="done", done=True)]
+
+        client = MagicMock()
+        client.chat.side_effect = [iter(chunks_1), iter(chunks_2)]
+        # deny shell, allow everything else
+        agent = Agent(
+            model="test", client=client,
+            on_tool_call=lambda n, a: n != "shell",
+        )
+        agent.run("test")
+        tool_msgs = [m for m in agent.messages if m["role"] == "tool"]
+        assert len(tool_msgs) == 2
+        assert "permission denied" in tool_msgs[0]["content"]
+        assert "ok" in tool_msgs[1]["content"]

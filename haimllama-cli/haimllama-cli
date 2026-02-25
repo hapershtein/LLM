@@ -2,5 +2,5 @@
 # Launcher for haimllama-cli — makes it runnable from anywhere.
 # Symlink or copy to ~/bin/haimllama-cli and chmod +x it.
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 exec python3 "$SCRIPT_DIR/main.py" "$@"

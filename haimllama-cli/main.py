@@ -27,11 +27,14 @@ from rich import print as rprint
 
 from agent import Agent
 from ollama_client import OllamaClient
-from tools import TOOL_MAP, TOOL_SCHEMAS
+from tools import TOOL_MAP, TOOL_SCHEMAS, TOOL_RISK
+from logger import setup_logging, get_logger
+
+log = get_logger("main")
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
-DEFAULT_MODEL = "qwen2.5:7b"
+DEFAULT_MODEL = "qwen3-coder:30b-a3b-q4_K_M"
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 CONFIG_PATH = Path.home() / ".config" / "haimllama-cli" / "config.json"
 
@@ -59,6 +62,20 @@ HELP_TEXT = """
   [bold]/save[/bold] [dim]<file>[/dim]     Save conversation to JSON file
   [bold]/load[/bold] [dim]<file>[/dim]     Load conversation from JSON file
   [bold]/exit[/bold]            Exit (also: Ctrl+C, Ctrl+D)
+
+[bold]Permissions:[/bold]
+  Tools are classified by risk level:
+    [green]safe[/green]      read_file, list_dir, find_files, grep, fetch_url  → auto-approved
+    [yellow]confirm[/yellow]   write_file, edit_file, run_tests, python_eval   → prompt [y/n/a/A]
+    [bold red]dangerous[/bold red] shell                                          → prompt with warning
+
+  When prompted:
+    [bold]y[/bold]  allow this call once
+    [bold]n[/bold]  deny this call (agent is informed and can adapt)
+    [bold]a[/bold]  always allow this specific tool for the session
+    [bold]A[/bold]  allow ALL tools for the rest of this session
+
+  Use [bold]--auto-approve[/bold] to skip all prompts.
 
 [bold]Tips:[/bold]
   • Pipe input:  echo "what files are here?" | haimllama-cli
@@ -120,6 +137,95 @@ def stream_token(token: str) -> None:
     console.print(token, end="", markup=False)
 
 
+# ── Permission system ──────────────────────────────────────────────────────────
+
+_RISK_BORDER = {"safe": "green", "confirm": "yellow", "dangerous": "red"}
+_RISK_LABEL  = {"safe": "[green]safe[/green]", "confirm": "[yellow]confirm[/yellow]", "dangerous": "[bold red]dangerous[/bold red]"}
+
+
+class PermissionSession:
+    """Gate tool execution with interactive prompts.
+
+    Risk levels
+    -----------
+    safe      → auto-approved, no prompt
+    confirm   → prompt with yellow border
+    dangerous → prompt with red border and ⚠ warning
+
+    Per-call choices
+    ----------------
+    y  — allow once
+    n  — deny once  (agent gets a [permission denied] message and can adapt)
+    a  — always allow this specific tool for the rest of the session
+    A  — allow ALL tools for the rest of the session (allow-all)
+    """
+
+    def __init__(self, auto_approve: bool = False):
+        self.auto_approve = auto_approve
+        self._tool_always: set[str] = set()   # tools approved for the whole session
+        self._allow_all: bool = False
+
+    # Called by agent as on_tool_call(name, args) → bool
+    def __call__(self, name: str, args: dict) -> bool:
+        risk = TOOL_RISK.get(name, "confirm")
+
+        # Always render the tool-call panel first so the user sees what's about
+        # to run before deciding.
+        print_tool_call(name, args)
+
+        # Auto-pass cases
+        if self._allow_all or self.auto_approve or risk == "safe" or name in self._tool_always:
+            return True
+
+        return self._prompt(name, risk)
+
+    def _prompt(self, name: str, risk: str) -> bool:
+        border = _RISK_BORDER[risk]
+        label  = _RISK_LABEL[risk]
+        icon   = "⚠  " if risk == "dangerous" else ""
+        title  = (
+            f"[bold red]⚠  Dangerous — Permission Required[/bold red]"
+            if risk == "dangerous"
+            else "[bold yellow]Permission Required[/bold yellow]"
+        )
+        body = (
+            f"  {icon}[bold]{name}[/bold]  risk={label}\n\n"
+            f"  [bold]y[/bold] allow once   "
+            f"[bold]n[/bold] deny   "
+            f"[bold]a[/bold] always allow [cyan]{name}[/cyan]   "
+            f"[bold]A[/bold] allow all tools this session"
+        )
+        console.print(Panel(body, title=title, border_style=border, expand=False))
+
+        while True:
+            try:
+                raw = input("  Allow? [y/n/a/A]: ").strip()
+            except (KeyboardInterrupt, EOFError):
+                console.print("\n[dim]Denied (interrupted).[/dim]")
+                log.info("Permission denied (interrupted) — %s", name)
+                return False
+
+            if raw == "y":
+                log.info("Permission granted (once) — %s", name)
+                return True
+            elif raw == "n":
+                console.print(f"[dim]Denied.[/dim]")
+                log.info("Permission denied — %s", name)
+                return False
+            elif raw == "a":
+                self._tool_always.add(name)
+                console.print(f"[dim]Always allowing [cyan]{name}[/cyan] this session.[/dim]")
+                log.info("Permission granted (session, tool=%s)", name)
+                return True
+            elif raw == "A":
+                self._allow_all = True
+                console.print("[dim]All tools allowed for this session.[/dim]")
+                log.info("Permission granted (allow-all session)")
+                return True
+            else:
+                console.print("[dim]Enter y, n, a, or A.[/dim]")
+
+
 # ── Config persistence ─────────────────────────────────────────────────────────
 
 def load_config() -> dict:
@@ -138,7 +244,12 @@ def save_config(cfg: dict) -> None:
 
 # ── REPL ───────────────────────────────────────────────────────────────────────
 
-def repl(agent: Agent, client: OllamaClient, model_holder: list[str]) -> None:
+def repl(
+    agent: Agent,
+    client: OllamaClient,
+    model_holder: list[str],
+    perm: "PermissionSession",
+) -> None:
     """Interactive REPL loop."""
     streaming_active = False  # track if we're mid-stream
 
@@ -156,14 +267,23 @@ def repl(agent: Agent, client: OllamaClient, model_holder: list[str]) -> None:
             console.print()
             streaming_active = False
 
+    def on_tool_call(name: str, args: dict) -> bool:
+        finish_stream()
+        return perm(name, args)  # shows panel + optional prompt, returns bool
+
     agent.on_token = on_token
-    agent.on_tool_call = lambda n, a: (finish_stream(), print_tool_call(n, a))
+    agent.on_tool_call = on_tool_call
     agent.on_tool_result = lambda n, r: print_tool_result(n, r)
 
+    perm_mode = (
+        "[dim]auto-approve[/dim]" if perm.auto_approve
+        else "[yellow]interactive[/yellow]"
+    )
     console.print(
         Panel(
             f"[bold]Model:[/bold] [cyan]{model_holder[0]}[/cyan]  "
-            f"[bold]Tools:[/bold] {len(TOOL_SCHEMAS)} available\n"
+            f"[bold]Tools:[/bold] {len(TOOL_SCHEMAS)} available  "
+            f"[bold]Permissions:[/bold] {perm_mode}\n"
             f"[dim]Type [bold]/help[/bold] for commands, [bold]/exit[/bold] to quit[/dim]",
             title="[bold magenta]haimllama-cli[/bold magenta]",
             border_style="magenta",
@@ -215,6 +335,7 @@ def repl(agent: Agent, client: OllamaClient, model_holder: list[str]) -> None:
                 if not arg:
                     console.print(f"Current model: [cyan]{model_holder[0]}[/cyan]")
                 else:
+                    log.info("Model switched: %s → %s", model_holder[0], arg)
                     model_holder[0] = arg
                     agent.model = arg
                     console.print(f"Switched to [cyan]{arg}[/cyan]")
@@ -284,7 +405,26 @@ def main():
     parser.add_argument("--no-tools", action="store_true", help="Disable all tools")
     parser.add_argument("--max-iter", type=int, default=20, help="Max agentic iterations (default 20)")
     parser.add_argument("--list-models", action="store_true", help="List available models and exit")
+    parser.add_argument(
+        "--log-file", default=None, metavar="PATH",
+        help="Write logs to this file (default: auto-generated under ~/.local/share/haimllama-cli/logs/)"
+    )
+    parser.add_argument(
+        "--log-level", default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Log verbosity (default: INFO)"
+    )
+    parser.add_argument(
+        "--log-console", action="store_true",
+        help="Also print log output to stderr"
+    )
+    parser.add_argument(
+        "--auto-approve", action="store_true",
+        help="Skip all permission prompts — approve every tool call automatically"
+    )
     args = parser.parse_args()
+
+    setup_logging(log_file=args.log_file, level=args.log_level, console=args.log_console)
 
     cfg = load_config()
     model = args.model or cfg.get("default_model", DEFAULT_MODEL)
@@ -304,12 +444,15 @@ def main():
             console.print(f"  {marker} {m}")
         return
 
+    log.info("Session start — model=%s  url=%s", model, args.url)
+
     if model not in available:
         console.print(
             f"[yellow]Warning:[/yellow] model [cyan]{model}[/cyan] not found locally. "
             f"Ollama may try to pull it.\n"
             f"Available: {', '.join(available)}"
         )
+        log.warning("Model %s not found in available models: %s", model, available)
 
     system = SYSTEM_PROMPT.format(cwd=os.getcwd())
     agent = Agent(
@@ -323,8 +466,13 @@ def main():
         from tools import TOOL_SCHEMAS as _schemas
         _schemas.clear()
 
-    # ── One-shot mode (query arg or piped stdin) ─────────────────────────
+    # ── Permission session ────────────────────────────────────────────────
+    # One-shot / piped mode is non-interactive: auto-approve by default so
+    # scripts work without hanging.  Pass --auto-approve to force it in REPL too.
     piped = not sys.stdin.isatty()
+    perm = PermissionSession(auto_approve=args.auto_approve or piped)
+
+    # ── One-shot mode (query arg or piped stdin) ─────────────────────────
     if args.query or piped:
         if piped:
             stdin_text = sys.stdin.read().strip()
@@ -339,7 +487,7 @@ def main():
             tokens_printed.append(tok)
 
         agent.on_token = on_token
-        agent.on_tool_call = lambda n, a: print_tool_call(n, a)
+        agent.on_tool_call = perm
         agent.on_tool_result = lambda n, r: print_tool_result(n, r)
 
         result = agent.run(query)
@@ -351,8 +499,9 @@ def main():
 
     # ── Interactive REPL ─────────────────────────────────────────────────
     model_holder = [model]
-    repl(agent, client, model_holder)
+    repl(agent, client, model_holder, perm)
 
+    log.info("Session end — final model=%s", model_holder[0])
     # Save last used model
     cfg["default_model"] = model_holder[0]
     save_config(cfg)

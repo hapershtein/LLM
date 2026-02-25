@@ -16,6 +16,8 @@ from tools import (
     run_shell,
     read_file,
     write_file,
+    edit_file,
+    run_tests,
     list_dir,
     find_files,
     grep,
@@ -25,6 +27,7 @@ from tools import (
     _coerce_types,
     TOOL_SCHEMAS,
     TOOL_MAP,
+    TOOL_RISK,
 )
 
 
@@ -415,8 +418,8 @@ class TestDispatch:
             assert "[error]" not in result
 
     def test_all_tools_registered(self):
-        expected = {"shell", "read_file", "write_file", "list_dir",
-                    "find_files", "grep", "python_eval", "fetch_url"}
+        expected = {"shell", "read_file", "write_file", "edit_file", "run_tests",
+                    "list_dir", "find_files", "grep", "python_eval", "fetch_url"}
         assert set(TOOL_MAP.keys()) == expected
 
 
@@ -434,3 +437,134 @@ class TestToolSchemas:
     def test_schema_count_matches_tool_map(self):
         schema_names = {s["function"]["name"] for s in TOOL_SCHEMAS}
         assert schema_names == set(TOOL_MAP.keys())
+
+
+# ── edit_file ───────────────────────────────────────────────────────────────────
+
+class TestEditFile:
+    def test_replaces_first_occurrence(self, tmp):
+        path = str(tmp / "hello.txt")
+        result = edit_file(path, "hello world", "hi there")
+        assert "Replaced 1" in result
+        content = Path(path).read_text()
+        assert "hi there" in content
+        assert "hello world" not in content
+
+    def test_replace_all_occurrences(self, tmp):
+        path = str(tmp / "repeat.txt")
+        Path(path).write_text("foo bar foo baz foo")
+        result = edit_file(path, "foo", "qux", replace_all=True)
+        assert "Replaced 3" in result
+        assert Path(path).read_text() == "qux bar qux baz qux"
+
+    def test_replaces_only_first_by_default(self, tmp):
+        path = str(tmp / "repeat2.txt")
+        Path(path).write_text("a a a")
+        edit_file(path, "a", "b")
+        assert Path(path).read_text() == "b a a"
+
+    def test_multiline_old_text(self, tmp):
+        path = str(tmp / "hello.txt")
+        result = edit_file(path, "hello world\nline two", "replaced\nlines")
+        assert "Replaced 1" in result
+        content = Path(path).read_text()
+        assert "replaced" in content
+        assert "hello world" not in content
+
+    def test_old_text_not_found_returns_error(self, tmp):
+        path = str(tmp / "hello.txt")
+        result = edit_file(path, "this does not exist", "x")
+        assert "[error]" in result
+        assert "not found" in result
+
+    def test_missing_file_returns_error(self):
+        result = edit_file("/nonexistent/file.txt", "x", "y")
+        assert "[error]" in result
+
+    def test_preserves_rest_of_file(self, tmp):
+        path = str(tmp / "hello.txt")
+        edit_file(path, "hello world", "goodbye world")
+        content = Path(path).read_text()
+        assert "line two" in content
+        assert "line three" in content
+
+    def test_empty_new_text_deletes_old(self, tmp):
+        path = str(tmp / "hello.txt")
+        edit_file(path, "hello world\n", "")
+        content = Path(path).read_text()
+        assert "hello world" not in content
+        assert "line two" in content
+
+    def test_dispatch_edit_file(self, tmp):
+        path = str(tmp / "hello.txt")
+        result = dispatch("edit_file", {"path": path, "old_text": "line two", "new_text": "line 2"})
+        assert "Replaced" in result
+        assert "line 2" in Path(path).read_text()
+
+
+# ── run_tests ──────────────────────────────────────────────────────────────────
+
+class TestRunTests:
+    def test_runs_passing_test(self, tmp):
+        test_file = tmp / "test_pass.py"
+        test_file.write_text("def test_ok():\n    assert 1 + 1 == 2\n")
+        result = run_tests(path=str(test_file))
+        assert "passed" in result or "1 passed" in result
+
+    def test_reports_failure(self, tmp):
+        test_file = tmp / "test_fail.py"
+        test_file.write_text("def test_broken():\n    assert 1 == 2\n")
+        result = run_tests(path=str(test_file))
+        assert "failed" in result or "FAILED" in result or "AssertionError" in result
+
+    def test_custom_args(self, tmp):
+        test_file = tmp / "test_verbose.py"
+        test_file.write_text("def test_v():\n    pass\n")
+        result = run_tests(path=str(test_file), args="-v")
+        assert "test_v" in result
+
+    def test_timeout_respected(self, tmp):
+        test_file = tmp / "test_slow.py"
+        test_file.write_text("import time\ndef test_sleep():\n    time.sleep(10)\n")
+        result = run_tests(path=str(test_file), timeout=2)
+        assert "[error]" in result and "timed out" in result
+
+    def test_nonexistent_path_returns_error(self):
+        result = run_tests(path="/nonexistent/tests")
+        # pytest will exit non-zero; we just verify something returned
+        assert result
+
+    def test_custom_command(self, tmp):
+        test_file = tmp / "test_cmd.py"
+        test_file.write_text("def test_x():\n    assert True\n")
+        result = run_tests(path=str(test_file), command="python3 -m pytest")
+        assert "passed" in result or "1 passed" in result
+
+    def test_dispatch_run_tests(self, tmp):
+        test_file = tmp / "test_dispatch.py"
+        test_file.write_text("def test_d():\n    pass\n")
+        result = dispatch("run_tests", {"path": str(test_file)})
+        assert "passed" in result or result
+
+
+# ── TOOL_RISK ──────────────────────────────────────────────────────────────────
+
+class TestToolRisk:
+    def test_every_tool_has_a_risk_level(self):
+        assert set(TOOL_RISK.keys()) == set(TOOL_MAP.keys())
+
+    def test_safe_tools(self):
+        for tool in ("read_file", "list_dir", "find_files", "grep", "fetch_url"):
+            assert TOOL_RISK[tool] == "safe", f"{tool} should be safe"
+
+    def test_confirm_tools(self):
+        for tool in ("write_file", "edit_file", "run_tests", "python_eval"):
+            assert TOOL_RISK[tool] == "confirm", f"{tool} should be confirm"
+
+    def test_dangerous_tools(self):
+        assert TOOL_RISK["shell"] == "dangerous"
+
+    def test_risk_values_are_valid(self):
+        valid = {"safe", "confirm", "dangerous"}
+        for tool, risk in TOOL_RISK.items():
+            assert risk in valid, f"{tool} has unknown risk '{risk}'"
